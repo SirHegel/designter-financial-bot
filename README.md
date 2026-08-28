@@ -11,13 +11,18 @@ por variables de entorno:
 - `TELEGRAM_BOT_TOKEN`: token vigente creado en BotFather.
 - `TELEGRAM_ALLOWED_CHAT_IDS`: uno o varios IDs de chat autorizados, separados
   por comas. También admite los IDs negativos usados por grupos.
+- `TELEGRAM_ALLOWED_USER_IDS`: IDs positivos de las personas autorizadas. En un
+  grupo deben coincidir tanto el chat como la persona que envía el comando.
 - `GOOGLE_SERVICE_ACCOUNT_JSON`: objeto JSON completo de una cuenta de servicio.
-- `GOOGLE_SHEETS_DOCUMENT`: nombre del documento; el valor predeterminado es
-  `BaseDatos_Finanzas`.
+- `GOOGLE_SHEETS_DOCUMENT_ID`: identificador inmutable que aparece entre `/d/` y
+  `/edit` en la URL del Spreadsheet; no se acepta un nombre ambiguo.
+- `FINANCE_TIMEZONE`: zona IANA usada para asignar mes y fecha; por defecto,
+  `America/Bogota`, independientemente de la zona horaria del servidor.
 
-Los chats que no estén en la lista permitida no pueden leer, registrar ni borrar
-datos. Los errores de servicios externos tampoco imprimen credenciales ni el
-contenido financiero en los registros del proceso.
+Solo la intersección de chats y personas permitidas puede leer, registrar o borrar
+datos. La confirmación de borrado pertenece a la misma persona que la solicitó,
+se consume una sola vez y caduca a los cinco minutos. Los errores de servicios
+externos tampoco imprimen credenciales ni contenido financiero en los registros.
 
 > [!IMPORTANT]
 > El repositorio conserva una alerta por un token de Telegram publicado en un
@@ -47,7 +52,9 @@ set +a
 export GOOGLE_SERVICE_ACCOUNT_JSON="$(jq -c . credenciales.json)"
 ```
 
-La cuenta de servicio debe tener acceso al documento indicado. Arranca el bot
+La cuenta de servicio debe tener acceso al ID de documento indicado. El bot usa
+`open_by_key` y solo el alcance de Google Sheets; no solicita acceso general a
+Drive. Arranca el bot
 después de cargar la configuración:
 
 ```bash
@@ -61,7 +68,7 @@ cuenta de servicio para evitar filtrarlos accidentalmente en registros.
 
 ## Pruebas
 
-Las pruebas usan valores sintéticos y un archivo temporal; no necesitan ninguna
+Las pruebas usan valores y clientes simulados; no necesitan ninguna
 credencial real ni realizan solicitudes de red.
 
 ```bash

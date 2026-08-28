@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime
 
 from settings import ConfigurationError, Settings
@@ -12,8 +13,8 @@ from settings import ConfigurationError, Settings
 LOGGER = logging.getLogger(__name__)
 GOOGLE_SCOPES = (
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
 )
+DELETION_CONFIRMATION_TTL_SECONDS = 5 * 60
 
 
 def build_bot(settings: Settings):
@@ -26,24 +27,31 @@ def build_bot(settings: Settings):
         settings.google_service_account,
         scopes=GOOGLE_SCOPES,
     )
-    document = client.open(settings.google_sheets_document)
-    pending_deletions: set[int] = set()
+    document = client.open_by_key(settings.google_sheets_document_id)
+    pending_deletions: dict[tuple[int, int], float] = {}
 
     def is_authorized(message) -> bool:
         chat_id = message.chat.id
-        if chat_id in settings.telegram_allowed_chat_ids:
+        user_id = getattr(getattr(message, "from_user", None), "id", None)
+        if (
+            chat_id in settings.telegram_allowed_chat_ids
+            and user_id in settings.telegram_allowed_user_ids
+        ):
             return True
         bot.reply_to(message, "⛔ Este chat no está autorizado para usar el bot.")
         return False
 
     def current_month_sheet():
         """Obtiene o crea la pestaña correspondiente al mes actual."""
-        month_name = datetime.now().strftime("%m-%Y")
+        month_name = datetime.now(settings.finance_timezone).strftime("%m-%Y")
         try:
             return document.worksheet(month_name)
         except gspread.WorksheetNotFound:
             sheet = document.add_worksheet(title=month_name, rows="1000", cols="5")
-            sheet.append_row(["Fecha", "Categoría", "Concepto", "Valor"])
+            sheet.append_row(
+                ["Fecha", "Categoría", "Concepto", "Valor"],
+                value_input_option="RAW",
+            )
             return sheet
 
     @bot.message_handler(commands=["utilidades", "resumen"])
@@ -90,7 +98,12 @@ def build_bot(settings: Settings):
     def request_deletion(message):
         if not is_authorized(message):
             return
-        pending_deletions.add(message.chat.id)
+        now = time.monotonic()
+        for actor, deadline in tuple(pending_deletions.items()):
+            if deadline <= now:
+                pending_deletions.pop(actor, None)
+        actor = (message.chat.id, message.from_user.id)
+        pending_deletions[actor] = now + DELETION_CONFIRMATION_TTL_SECONDS
         bot.reply_to(
             message,
             "⚠️ *ADVERTENCIA:* ¿Borrar los datos del mes?\nEscribe /confirmar.",
@@ -101,12 +114,13 @@ def build_bot(settings: Settings):
     def confirm_deletion(message):
         if not is_authorized(message):
             return
-        if message.chat.id not in pending_deletions:
+        actor = (message.chat.id, message.from_user.id)
+        deadline = pending_deletions.pop(actor, None)
+        if deadline is None or deadline <= time.monotonic():
             bot.reply_to(message, "No hay un borrado pendiente para este chat.")
             return
 
-        current_month_sheet().batch_clear(["A2:E1000"])
-        pending_deletions.discard(message.chat.id)
+        current_month_sheet().batch_clear(["A2:E"])
         bot.reply_to(message, "✅ Datos borrados. Balance en ceros.")
 
     @bot.message_handler(func=lambda message: True)
@@ -137,7 +151,7 @@ def build_bot(settings: Settings):
             sheet = current_month_sheet()
             sheet.append_row(
                 [
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    datetime.now(settings.finance_timezone).strftime("%Y-%m-%d %H:%M:%S"),
                     category,
                     message.text,
                     final_value,
